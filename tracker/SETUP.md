@@ -63,24 +63,7 @@ After unzipping, copy just the **`tracker`** folder into the drive/folder you wa
 > The ZIP is the safest because the `#1- … .cmd` launcher names contain `#` and spaces,
 > which break direct download URLs. The ZIP keeps them intact.
 
-### Alternative — PowerShell (downloads scripts, builds the launchers locally)
 
-Open PowerShell **inside the folder/drive you want to track** and paste:
-
-```powershell
-$b="https://raw.githubusercontent.com/redwan786/Drive-Activity-Tracker-Template/master/tracker"
-New-Item -ItemType Directory -Force tracker | Out-Null
-"INITIAL.ps1","UPDATE_CHANGES.ps1","RESET_CHANGES.ps1","SETUP.md" | % { Invoke-WebRequest "$b/$_" -OutFile "tracker\$_" }
-@{"#1- INITIAL.cmd"="INITIAL.ps1";"#2- UPDATE_CHANGES.cmd"="UPDATE_CHANGES.ps1";"#3- RESET_CHANGES.cmd"="RESET_CHANGES.ps1"}.GetEnumerator() | % {
-  "@echo off`r`ncd /d `"%~dp0`"`r`npowershell -NoProfile -ExecutionPolicy Bypass -Command `"Unblock-File -LiteralPath '%~dp0$($_.Value)' -EA SilentlyContinue; & '%~dp0$($_.Value)'`"`r`npause" |
-  Set-Content "tracker\$($_.Key)" -Encoding ASCII
-}
-```
-
-This downloads the 3 scripts + SETUP.md and **creates the `#1/#2/#3` launchers locally**
-(avoiding the broken-URL problem). Then double-click **`tracker\#1- INITIAL.cmd`**.
-
----
 
 ## Case 1: First-time setup on a brand-new folder/drive
 
