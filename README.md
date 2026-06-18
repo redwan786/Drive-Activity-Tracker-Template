@@ -53,19 +53,7 @@ Only the tracker files are pushed — **none of your actual content leaves your 
 **[⬇ Download ZIP](https://github.com/redwan786/Drive-Activity-Tracker-Template/archive/refs/heads/master.zip)** →
 unzip → copy the **`tracker`** folder into the drive/folder you want to track.
 
-<details><summary>Prefer PowerShell? (downloads scripts, builds launchers locally)</summary>
 
-```powershell
-$b="https://raw.githubusercontent.com/redwan786/Drive-Activity-Tracker-Template/master/tracker"
-New-Item -ItemType Directory -Force tracker | Out-Null
-"INITIAL.ps1","UPDATE_CHANGES.ps1","RESET_CHANGES.ps1","SETUP.md" | % { Invoke-WebRequest "$b/$_" -OutFile "tracker\$_" }
-@{"#1- INITIAL.cmd"="INITIAL.ps1";"#2- UPDATE_CHANGES.cmd"="UPDATE_CHANGES.ps1";"#3- RESET_CHANGES.cmd"="RESET_CHANGES.ps1"}.GetEnumerator() | % {
-  "@echo off`r`ncd /d `"%~dp0`"`r`npowershell -NoProfile -ExecutionPolicy Bypass -Command `"Unblock-File -LiteralPath '%~dp0$($_.Value)' -EA SilentlyContinue; & '%~dp0$($_.Value)'`"`r`npause" |
-  Set-Content "tracker\$($_.Key)" -Encoding ASCII
-}
-```
-The `#1- … .cmd` names contain `#`/spaces that break direct URLs, so they are built locally.
-</details>
 
 **2.** Open the `tracker` folder → **double-click `#1- INITIAL.cmd`**
 
