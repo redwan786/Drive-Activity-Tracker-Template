@@ -35,7 +35,7 @@ if (-not (Test-Path -LiteralPath $gitignore)) {
 
 Write-Host "Generating tree..." -ForegroundColor Yellow
 
-$tree = & cmd /c "tree `"$root`" /F /A 2>&1"
+$tree = & cmd /c "tree `"$root`" /F /A 2>nul"
 $treeText = $tree -join "`n"
 
 # Dynamic title from folder name (portable - no hardcoded names)
@@ -75,7 +75,7 @@ Set-Content -LiteralPath $readme -Value $full -Encoding UTF8
 Write-Host "README.md written." -ForegroundColor Green
 
 # Detect changes via snapshot (stores path|size so renames/moves can be detected)
-$items = Get-ChildItem -LiteralPath $root -Recurse -Force |
+$items = Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
     Where-Object { ($_.FullName.Replace($root, '').TrimStart('\')) -notmatch '^\.git(\\|$)' }
 
 $curMap = @{}
@@ -345,7 +345,7 @@ if (-not $firstRun) {
 }
 
 Set-Location -LiteralPath $root
-git add -A
+git add tracker/ README.md .gitignore
 git commit -m $msg
 git push
 Write-Host "Done! Pushed at $date" -ForegroundColor Green
