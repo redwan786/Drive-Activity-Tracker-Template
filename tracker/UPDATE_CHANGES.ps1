@@ -85,7 +85,7 @@ if ($isDriveRoot) {
         }
     }
     $treeSection = $shallowLines -join "`n"
-    $treeNote    = "> **Note:** Drive root detected — showing top 2 levels only to keep README renderable on GitHub. All changes are tracked in [CHANGES.md](tracker/CHANGES.md)."
+    $treeNote    = "> **Note:** Drive root detected - showing top 2 levels only to keep README renderable on GitHub. All changes are tracked in [CHANGES.md](tracker/CHANGES.md)."
     $treeHeader  = "## Folder Structure (Top 2 Levels)"
 } else {
     $tree      = & cmd /c "tree `"$root`" /F /A 2>nul"
@@ -107,7 +107,7 @@ if ($isDriveRoot) {
         }
         $treeSizeMB  = [math]::Round($treeBytes / 1MB, 1)
         $treeSection = $shallowLines -join "`n"
-        $treeNote    = "> **Note:** Full tree is $treeSizeMB MB — showing top 2 levels only. All changes are in [CHANGES.md](tracker/CHANGES.md)."
+        $treeNote    = "> **Note:** Full tree is $treeSizeMB MB - showing top 2 levels only. All changes are in [CHANGES.md](tracker/CHANGES.md)."
         $treeHeader  = "## Folder Structure (Top 2 Levels)"
     } else {
         $treeSection = $treeText
