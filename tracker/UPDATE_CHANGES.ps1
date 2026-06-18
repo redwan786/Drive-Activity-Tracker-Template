@@ -55,6 +55,8 @@ foreach ($tf in $topFolders) {
 $header = @"
 # $folderName - Index
 
+📜 **[View Change Log → tracker/CHANGES.md](tracker/CHANGES.md)**
+
 ---
 
 ## Quick Find

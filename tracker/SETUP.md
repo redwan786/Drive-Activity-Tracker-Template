@@ -67,6 +67,12 @@ After unzipping, copy just the **`tracker`** folder into the drive/folder you wa
 
 ## Case 1: First-time setup on a brand-new folder/drive
 
+> ### ⚠️ Tracking C:\ (System Drive)?
+> - **Run as Administrator** — right-click `#1- INITIAL.cmd` → "Run as administrator"
+> - **First run takes longer** — C:\ has hundreds of thousands of files; the initial scan can take 10–20 minutes. This is normal. Subsequent runs are faster.
+> - **Some system folders will be skipped** (e.g. `C:\System Volume Information`, `C:\Windows\System32\config\BFS`) — Windows locks these even from Administrators. This is expected behaviour, identical to how `tree /f` handles them.
+> - **README.md will be large** — GitHub may not render it inline, but it is still stored and accessible via "View raw".
+
 **Step 1** — Put the `tracker` folder (from above) inside the folder/drive you want to track.
 
 **Step 2** — Open the `tracker` folder → **double-click `#1- INITIAL.cmd`**.
