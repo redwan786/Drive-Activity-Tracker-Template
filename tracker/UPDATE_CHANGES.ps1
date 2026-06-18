@@ -52,10 +52,13 @@ foreach ($tf in $topFolders) {
     $quick += "| ``$($tf.Name)/`` | $desc |`n"
 }
 
+$emScroll2 = [char]::ConvertFromUtf32(0x1F4DC)
+$emArrow2  = [char]::ConvertFromUtf32(0x27A1)
+
 $header = @"
 # $folderName - Index
 
-📜 **[View Change Log → tracker/CHANGES.md](tracker/CHANGES.md)**
+$emScroll2 **[View Change Log $emArrow2 tracker/CHANGES.md](tracker/CHANGES.md)**
 
 ---
 
