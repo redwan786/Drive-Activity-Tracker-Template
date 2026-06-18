@@ -55,7 +55,48 @@ foreach ($tf in $topFolders) {
 $emScroll2 = [char]::ConvertFromUtf32(0x1F4DC)
 $emArrow2  = [char]::ConvertFromUtf32(0x27A1)
 
-$header = @"
+# If tree is too large (>2MB), only show top-level folders to keep README renderable on GitHub
+$treeBytes = [System.Text.Encoding]::UTF8.GetByteCount($treeText)
+$treeSizeMB = [math]::Round($treeBytes / 1MB, 1)
+
+if ($treeBytes -gt 2MB) {
+    # Build a shallow tree: top-level folders + their direct children only
+    $shallowLines = @()
+    $shallowLines += $root
+    $rootFiles = Get-ChildItem -LiteralPath $root -File -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '^\.' }
+    foreach ($f in $rootFiles) { $shallowLines += "+--- $($f.Name)" }
+    foreach ($tf in $topFolders) {
+        $shallowLines += "+---$($tf.Name)\"
+        $children = Get-ChildItem -LiteralPath $tf.FullName -Force -ErrorAction SilentlyContinue | Sort-Object Name
+        foreach ($ch in $children) {
+            if ($ch.PSIsContainer) { $shallowLines += "|   +---$($ch.Name)\" }
+            else                   { $shallowLines += "|       $($ch.Name)" }
+        }
+    }
+    $treeSection = ($shallowLines -join "`n")
+    $treeNote = "> **Note:** Full tree is $treeSizeMB MB — showing top 2 levels only to keep README renderable on GitHub. All changes are tracked in [CHANGES.md](tracker/CHANGES.md)."
+    $header = @"
+# $folderName - Index
+
+$emScroll2 **[View Change Log $emArrow2 tracker/CHANGES.md](tracker/CHANGES.md)**
+
+---
+
+## Quick Find
+
+$quick
+---
+
+$treeNote
+
+## Folder Structure (Top 2 Levels)
+
+``````
+"@
+} else {
+    $treeSection = $treeText
+    $header = @"
 # $folderName - Index
 
 $emScroll2 **[View Change Log $emArrow2 tracker/CHANGES.md](tracker/CHANGES.md)**
@@ -71,10 +112,11 @@ $quick
 
 ``````
 "@
+}
 
 $footer = "``````"
 
-$full = $header + $treeText + "`n" + $footer + "`n`n> Last updated: $date"
+$full = $header + $treeSection + "`n" + $footer + "`n`n> Last updated: $date"
 
 Set-Content -LiteralPath $readme -Value $full -Encoding UTF8
 Write-Host "README.md written." -ForegroundColor Green
