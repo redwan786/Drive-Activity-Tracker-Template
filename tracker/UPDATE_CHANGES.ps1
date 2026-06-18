@@ -75,7 +75,7 @@ if ($treeBytes -gt 2MB) {
         }
     }
     $treeSection = ($shallowLines -join "`n")
-    $treeNote = "> **Note:** Full tree is $treeSizeMB MB — showing top 2 levels only to keep README renderable on GitHub. All changes are tracked in [CHANGES.md](tracker/CHANGES.md)."
+    $treeNote = "> **Note:** Full tree is $treeSizeMB MB - showing top 2 levels only to keep README renderable on GitHub. All changes are tracked in [CHANGES.md](tracker/CHANGES.md)."
     $header = @"
 # $folderName - Index
 
@@ -193,7 +193,7 @@ foreach ($rf in $remFolders) {
 }
 
 # --- 2. File move/rename detection (same leaf name + same size) ---
-# Only files whose parent is unchanged — a file inside a wholesale added/deleted
+# Only files whose parent is unchanged - a file inside a wholesale added/deleted
 # folder belongs to that folder's tree, not a separate move.
 $remFiles = @($removed | Where-Object { -not $consumed.ContainsKey($_) -and $prevMap[$_] -ge 0 -and (Test-ParentUnchanged $_ $removedSetRaw) })
 $addFiles = @($added   | Where-Object { -not $consumed.ContainsKey($_) -and $curMap[$_]  -ge 0 -and (Test-ParentUnchanged $_ $addedSetRaw)   })
@@ -246,7 +246,7 @@ foreach ($r in $removedRoots) {
 }
 $removedFlat = @($removedPaths | Where-Object { -not $removedGrouped.ContainsKey($_) })
 
-# Commit message names (root folders + flat items — keeps it short)
+# Commit message names (root folders + flat items - keeps it short)
 $trulyAdded   = (@($addedRoots)   + @($addedFlat))   | ForEach-Object { Split-Path $_ -Leaf } | Select-Object -Unique
 $trulyRemoved = (@($removedRoots) + @($removedFlat)) | ForEach-Object { Split-Path $_ -Leaf } | Select-Object -Unique
 $trulyMoved   = @($renames + $moves) | ForEach-Object { Split-Path $_.To -Leaf } | Select-Object -Unique
@@ -355,7 +355,7 @@ if (-not $firstRun -and $anyChange) {
 
     $entry += "---`n`n"
 
-    # Premium header (static) — emoji injected via variable
+    # Premium header (static) - emoji injected via variable
     $logHeader = @"
 <div align="center">
 
