@@ -9,13 +9,32 @@ if ((Split-Path $scriptDir -Leaf) -ieq 'tracker') {
     $changesLog = "$root\CHANGES.md"
 }
 $readme     = "$root\README.md"                    # README stays at repo root (for GitHub)
-# Snapshot name is unique per folder (so different drives/folders don't clash)
 $snapId     = ($root -replace '[^a-zA-Z0-9]', '_')
 $snapFile   = "$env:TEMP\drivetrack_$snapId.txt"
 $date       = Get-Date -Format "yyyy-MM-dd HH:mm"
 $dateFull   = Get-Date -Format "dd/MM/yyyy  dddd  hh:mm:ss tt"
 
-# Auto-create the root .gitignore if it is missing (keeps repo root self-healing)
+# =============================================================================
+# FIX 1 — SPEED: Folder names to skip entirely during scan.
+# Add any folder you don't want tracked. Case-insensitive. Leaf name only.
+# =============================================================================
+$excludeNames = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase
+)
+@(
+    'Windows',
+    'System Volume Information',
+    '$Recycle.Bin',
+    'Recovery',
+    'WpSystem',
+    'PerfLogs',
+    'MSOCache',
+    'hiberfil.sys',
+    'pagefile.sys',
+    'swapfile.sys'
+) | ForEach-Object { $excludeNames.Add($_) | Out-Null }
+
+# Auto-create the root .gitignore if it is missing
 $gitignore = "$root\.gitignore"
 if (-not (Test-Path -LiteralPath $gitignore)) {
     @'
@@ -35,34 +54,25 @@ if (-not (Test-Path -LiteralPath $gitignore)) {
 
 Write-Host "Generating tree..." -ForegroundColor Yellow
 
-$tree = & cmd /c "tree `"$root`" /F /A 2>nul"
-$treeText = $tree -join "`n"
-
-# Dynamic title from folder name (portable - no hardcoded names)
 $folderName = Split-Path $root -Leaf
 
-# Auto Quick Find: list top-level folders (alphabetical), with their direct subfolder count
-$topFolders = Get-ChildItem -LiteralPath $root -Directory -Force |
+$topFolders = Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -ne '.git' } | Sort-Object Name
 $quick = "| Folder | Contains |`n|--------|----------|`n"
 foreach ($tf in $topFolders) {
-    $subs = @(Get-ChildItem -LiteralPath $tf.FullName -Directory -Force -ErrorAction SilentlyContinue)
-    $files = @(Get-ChildItem -LiteralPath $tf.FullName -File -Force -ErrorAction SilentlyContinue)
-    $desc = "$($subs.Count) folder(s), $($files.Count) file(s)"
+    $subs  = @(Get-ChildItem -LiteralPath $tf.FullName -Directory -Force -ErrorAction SilentlyContinue)
+    $files = @(Get-ChildItem -LiteralPath $tf.FullName -File    -Force -ErrorAction SilentlyContinue)
+    $desc  = "$($subs.Count) folder(s), $($files.Count) file(s)"
     $quick += "| ``$($tf.Name)/`` | $desc |`n"
 }
 
 $emScroll2 = [char]::ConvertFromUtf32(0x1F4DC)
 $emArrow2  = [char]::ConvertFromUtf32(0x27A1)
 
-# If tree is too large (>2MB), only show top-level folders to keep README renderable on GitHub
-$treeBytes = [System.Text.Encoding]::UTF8.GetByteCount($treeText)
-$treeSizeMB = [math]::Round($treeBytes / 1MB, 1)
+$isDriveRoot = $root -match '^[A-Za-z]:\\?$'
 
-if ($treeBytes -gt 2MB) {
-    # Build a shallow tree: top-level folders + their direct children only
-    $shallowLines = @()
-    $shallowLines += $root
+if ($isDriveRoot) {
+    $shallowLines = @($root)
     $rootFiles = Get-ChildItem -LiteralPath $root -File -Force -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -notmatch '^\.' }
     foreach ($f in $rootFiles) { $shallowLines += "+--- $($f.Name)" }
@@ -74,9 +84,39 @@ if ($treeBytes -gt 2MB) {
             else                   { $shallowLines += "|       $($ch.Name)" }
         }
     }
-    $treeSection = ($shallowLines -join "`n")
-    $treeNote = "> **Note:** Full tree is $treeSizeMB MB - showing top 2 levels only to keep README renderable on GitHub. All changes are tracked in [CHANGES.md](tracker/CHANGES.md)."
-    $header = @"
+    $treeSection = $shallowLines -join "`n"
+    $treeNote    = "> **Note:** Drive root detected — showing top 2 levels only to keep README renderable on GitHub. All changes are tracked in [CHANGES.md](tracker/CHANGES.md)."
+    $treeHeader  = "## Folder Structure (Top 2 Levels)"
+} else {
+    $tree      = & cmd /c "tree `"$root`" /F /A 2>nul"
+    $treeText  = $tree -join "`n"
+    $treeBytes = [System.Text.Encoding]::UTF8.GetByteCount($treeText)
+
+    if ($treeBytes -gt 2MB) {
+        $shallowLines = @($root)
+        $rootFiles = Get-ChildItem -LiteralPath $root -File -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch '^\.' }
+        foreach ($f in $rootFiles) { $shallowLines += "+--- $($f.Name)" }
+        foreach ($tf in $topFolders) {
+            $shallowLines += "+---$($tf.Name)\"
+            $children = Get-ChildItem -LiteralPath $tf.FullName -Force -ErrorAction SilentlyContinue | Sort-Object Name
+            foreach ($ch in $children) {
+                if ($ch.PSIsContainer) { $shallowLines += "|   +---$($ch.Name)\" }
+                else                   { $shallowLines += "|       $($ch.Name)" }
+            }
+        }
+        $treeSizeMB  = [math]::Round($treeBytes / 1MB, 1)
+        $treeSection = $shallowLines -join "`n"
+        $treeNote    = "> **Note:** Full tree is $treeSizeMB MB — showing top 2 levels only. All changes are in [CHANGES.md](tracker/CHANGES.md)."
+        $treeHeader  = "## Folder Structure (Top 2 Levels)"
+    } else {
+        $treeSection = $treeText
+        $treeNote    = ""
+        $treeHeader  = "## Full Folder Tree"
+    }
+}
+
+$header = @"
 # $folderName - Index
 
 $emScroll2 **[View Change Log $emArrow2 tracker/CHANGES.md](tracker/CHANGES.md)**
@@ -90,48 +130,66 @@ $quick
 
 $treeNote
 
-## Folder Structure (Top 2 Levels)
+$treeHeader
 
 ``````
 "@
-} else {
-    $treeSection = $treeText
-    $header = @"
-# $folderName - Index
 
-$emScroll2 **[View Change Log $emArrow2 tracker/CHANGES.md](tracker/CHANGES.md)**
-
----
-
-## Quick Find
-
-$quick
----
-
-## Full Folder Tree
-
-``````
-"@
-}
-
-$footer = "``````"
-
-$full = $header + $treeSection + "`n" + $footer + "`n`n> Last updated: $date"
+$full = $header + $treeSection + "`n``````" + "`n`n> Last updated: $date"
 
 Set-Content -LiteralPath $readme -Value $full -Encoding UTF8
 Write-Host "README.md written." -ForegroundColor Green
 
-# Detect changes via snapshot (stores path|size so renames/moves can be detected)
-Write-Host "Scanning files... (large drives take a few minutes)" -ForegroundColor Yellow
-$items = Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
-    Where-Object { ($_.FullName.Replace($root, '').TrimStart('\')) -notmatch '^\.git(\\|$)' }
+# =============================================================================
+# FIX 2 — PER-DIRECTORY ERROR HANDLING:
+# GetDirectories/GetFiles returns a full array atomically.
+# If one folder is denied, only THAT folder is skipped — siblings & deep
+# subfolders of accessible folders are still scanned. No whole-level drop.
+# Excluded folder names ($excludeNames) are never pushed onto the stack.
+# =============================================================================
+Write-Host "Scanning files..." -ForegroundColor Yellow
+$curMap    = @{}
+$scanStack = [System.Collections.Generic.Stack[string]]::new()
+$scanStack.Push($root)
 
-Write-Host "Building snapshot... ($($items.Count) items found)" -ForegroundColor Yellow
-$curMap = @{}
-foreach ($it in $items) {
-    $rel = $it.FullName.Replace($root, '').TrimStart('\')
-    $curMap[$rel] = if ($it.PSIsContainer) { [long]-1 } else { [long]$it.Length }
+while ($scanStack.Count -gt 0) {
+    $dir = $scanStack.Pop()
+
+    # --- Enumerate subdirectories (atomic array call) ---
+    $subdirs = $null
+    try { $subdirs = [System.IO.Directory]::GetDirectories($dir) } catch { $subdirs = @() }
+
+    foreach ($d in $subdirs) {
+        $leaf = [System.IO.Path]::GetFileName($d)
+
+        # Skip excluded names (Windows, $Recycle.Bin, etc.)
+        if ($excludeNames.Contains($leaf)) { continue }
+
+        $rel = $d.Substring($root.Length).TrimStart('\')
+        if ($rel -match '^\.git(\\|$)') { continue }
+
+        $curMap[$rel] = [long]-1
+        $scanStack.Push($d)
+    }
+
+    # --- Enumerate files (atomic array call) ---
+    $fileList = $null
+    try { $fileList = [System.IO.Directory]::GetFiles($dir) } catch { $fileList = @() }
+
+    foreach ($f in $fileList) {
+        $leaf = [System.IO.Path]::GetFileName($f)
+        if ($excludeNames.Contains($leaf)) { continue }   # skip excluded filenames too
+
+        $rel = $f.Substring($root.Length).TrimStart('\')
+        if ($rel -match '^\.git(\\|$)') { continue }
+
+        try   { $sz = (New-Object System.IO.FileInfo($f)).Length }
+        catch { $sz = [long]0 }
+        $curMap[$rel] = [long]$sz
+    }
 }
+
+Write-Host "Snapshot built. ($($curMap.Count) items found)" -ForegroundColor Yellow
 Write-Host "Comparing changes..." -ForegroundColor Yellow
 
 $firstRun = -not (Test-Path -LiteralPath $snapFile)
@@ -141,38 +199,28 @@ if (-not $firstRun) {
         if ($line -eq '') { continue }
         $i = $line.LastIndexOf('|')
         if ($i -gt 0) { $prevMap[$line.Substring(0,$i)] = [long]$line.Substring($i+1) }
-        else          { $prevMap[$line] = [long]-1 }   # backward compat (old path-only snapshot)
+        else          { $prevMap[$line] = [long]-1 }
     }
 }
 
-# Save new snapshot (path|size)
 ($curMap.Keys | Sort-Object | ForEach-Object { "$_|$($curMap[$_])" }) | Set-Content -LiteralPath $snapFile -Encoding UTF8
 
-# Raw added / removed
 $added   = @($curMap.Keys  | Where-Object { -not $prevMap.ContainsKey($_) } | Sort-Object)
 $removed = @($prevMap.Keys | Where-Object { -not $curMap.ContainsKey($_) } | Sort-Object)
 
-# Raw sets (used to tell whether an item's PARENT also changed)
 $addedSetRaw   = @{}; $added   | ForEach-Object { $addedSetRaw[$_]   = $true }
 $removedSetRaw = @{}; $removed | ForEach-Object { $removedSetRaw[$_] = $true }
 
-# A rename/move is only real when the item's PARENT is unchanged.
-# If the parent itself was added/removed, the item is just part of a
-# whole-folder add/delete (prevents false "tmp -> tmp" type matches across
-# completely unrelated trees).
 function Test-ParentUnchanged($relPath, $set) {
     $par = Split-Path $relPath -Parent
-    if (-not $par) { return $true }          # top-level item, parent is the root (unchanged)
+    if (-not $par) { return $true }
     return -not $set.ContainsKey($par)
 }
 
-$renames = @()   # folder renames  {From,To,Count}
-$moves   = @()   # file moves/renames {From,To}
+$renames  = @()
+$moves    = @()
 $consumed = @{}
 
-# --- 1. Folder rename detection (subtree matches via prefix swap) ---
-# Shallowest folders first so a top-level rename consumes its whole subtree
-# (otherwise nested folders match first and the parent looks like delete+add)
 $remFolders = @($removed | Where-Object { $prevMap[$_] -eq -1 -and (Test-ParentUnchanged $_ $removedSetRaw) } | Sort-Object { ($_ -split '\\').Count }, { $_ })
 $addFolders = @($added   | Where-Object { $curMap[$_]  -eq -1 -and (Test-ParentUnchanged $_ $addedSetRaw)   } | Sort-Object { ($_ -split '\\').Count }, { $_ })
 foreach ($rf in $remFolders) {
@@ -192,9 +240,6 @@ foreach ($rf in $remFolders) {
     }
 }
 
-# --- 2. File move/rename detection (same leaf name + same size) ---
-# Only files whose parent is unchanged - a file inside a wholesale added/deleted
-# folder belongs to that folder's tree, not a separate move.
 $remFiles = @($removed | Where-Object { -not $consumed.ContainsKey($_) -and $prevMap[$_] -ge 0 -and (Test-ParentUnchanged $_ $removedSetRaw) })
 $addFiles = @($added   | Where-Object { -not $consumed.ContainsKey($_) -and $curMap[$_]  -ge 0 -and (Test-ParentUnchanged $_ $addedSetRaw)   })
 foreach ($r in $remFiles) {
@@ -211,20 +256,17 @@ foreach ($r in $remFiles) {
     }
 }
 
-# Final pure adds / removes (after rename+move consumed)
 $addedPaths   = @($added   | Where-Object { -not $consumed.ContainsKey($_) })
 $removedPaths = @($removed | Where-Object { -not $consumed.ContainsKey($_) })
 
-# --- Group whole-folder add/delete under their root (so a new folder with
-#     many items shows as ONE root + a nested tree, not 50 separate rows) ---
 $addedSet = @{};   $addedPaths   | ForEach-Object { $addedSet[$_] = $true }
 $removedSet = @{}; $removedPaths | ForEach-Object { $removedSet[$_] = $true }
 
 $addedRoots = @()
 foreach ($p in $addedPaths) {
-    if ($curMap[$p] -ne -1) { continue }                          # must be a folder
+    if ($curMap[$p] -ne -1) { continue }
     $par = Split-Path $p -Parent
-    if ($par -and $addedSet.ContainsKey($par)) { continue }       # parent also new -> not the root
+    if ($par -and $addedSet.ContainsKey($par)) { continue }
     if (@($addedPaths | Where-Object { $_.StartsWith("$p\") }).Count -gt 0) { $addedRoots += $p }
 }
 $addedGrouped = @{}
@@ -235,7 +277,7 @@ $addedFlat = @($addedPaths | Where-Object { -not $addedGrouped.ContainsKey($_) }
 
 $removedRoots = @()
 foreach ($p in $removedPaths) {
-    if ($prevMap[$p] -ne -1) { continue }                         # must be a folder
+    if ($prevMap[$p] -ne -1) { continue }
     $par = Split-Path $p -Parent
     if ($par -and $removedSet.ContainsKey($par)) { continue }
     if (@($removedPaths | Where-Object { $_.StartsWith("$p\") }).Count -gt 0) { $removedRoots += $p }
@@ -246,17 +288,14 @@ foreach ($r in $removedRoots) {
 }
 $removedFlat = @($removedPaths | Where-Object { -not $removedGrouped.ContainsKey($_) })
 
-# Commit message names (root folders + flat items - keeps it short)
 $trulyAdded   = (@($addedRoots)   + @($addedFlat))   | ForEach-Object { Split-Path $_ -Leaf } | Select-Object -Unique
 $trulyRemoved = (@($removedRoots) + @($removedFlat)) | ForEach-Object { Split-Path $_ -Leaf } | Select-Object -Unique
 $trulyMoved   = @($renames + $moves) | ForEach-Object { Split-Path $_.To -Leaf } | Select-Object -Unique
 
 $anyChange = ($addedPaths.Count + $removedPaths.Count + $renames.Count + $moves.Count) -gt 0
 
-# --- Update CHANGES.md with premium UI (newest entry on top) ---
 if (-not $firstRun -and $anyChange) {
 
-    # Helper: detect File vs Folder
     function Get-ItemKind($relPath, $exists) {
         $full = Join-Path $root $relPath
         if ($exists) {
@@ -270,16 +309,14 @@ if (-not $firstRun -and $anyChange) {
     $delCount  = $removedPaths.Count
     $moveCount = $renames.Count + $moves.Count
 
-    # Emojis built from Unicode (keeps this .ps1 pure ASCII so it never corrupts)
-    $emFolder = [char]::ConvertFromUtf32(0x1F4C1)  # folder
-    $emFile   = [char]::ConvertFromUtf32(0x1F4C4)  # file
-    $emGreen  = [char]::ConvertFromUtf32(0x1F7E2)  # green circle
-    $emRed    = [char]::ConvertFromUtf32(0x1F534)  # red circle
-    $emBlue   = [char]::ConvertFromUtf32(0x1F535)  # blue circle (moved/renamed)
-    $emArrow  = [char]::ConvertFromUtf32(0x2192)   # right arrow
-    $emScroll = [char]::ConvertFromUtf32(0x1F4DC)  # scroll
+    $emFolder = [char]::ConvertFromUtf32(0x1F4C1)
+    $emFile   = [char]::ConvertFromUtf32(0x1F4C4)
+    $emGreen  = [char]::ConvertFromUtf32(0x1F7E2)
+    $emRed    = [char]::ConvertFromUtf32(0x1F534)
+    $emBlue   = [char]::ConvertFromUtf32(0x1F535)
+    $emArrow  = [char]::ConvertFromUtf32(0x2192)
+    $emScroll = [char]::ConvertFromUtf32(0x1F4DC)
 
-    # Helper: render a nested tree for a grouped root folder
     function Render-Tree($paths, $rootPath, $isAdded) {
         $parent = Split-Path $rootPath -Parent
         $lines = @()
@@ -295,17 +332,14 @@ if (-not $firstRun -and $anyChange) {
         return ($lines -join "`n")
     }
 
-    $fence = '```'   # triple backtick (single-quoted = literal)
+    $fence = '```'
 
-    # Build this run's entry block (badges)
-    # Self-contained <kbd> badges (no external image links) with colored emoji dots
     $entry  = "### " + '`' + $dateFull + '`' + "  &nbsp; "
     if ($addCount  -gt 0) { $entry += "![Added](https://img.shields.io/badge/Added-$addCount-2ea44f?style=flat-square) " }
     if ($delCount  -gt 0) { $entry += "![Deleted](https://img.shields.io/badge/Deleted-$delCount-d73a49?style=flat-square) " }
     if ($moveCount -gt 0) { $entry += "![Moved](https://img.shields.io/badge/Renamed%2FMoved-$moveCount-0969da?style=flat-square)" }
     $entry += "`n`n"
 
-    # Table for single items (renames, moves, flat add/delete)
     $rows = @()
     foreach ($m in $renames) {
         $rows += "| $emBlue | **Renamed** | $emFolder Folder | ``$(Split-Path $m.To -Leaf)`` | ``$(Join-Path $root $m.From)`` $emArrow ``$(Join-Path $root $m.To)`` |"
@@ -329,7 +363,6 @@ if (-not $firstRun -and $anyChange) {
         $entry += ($rows -join "`n") + "`n`n"
     }
 
-    # Collapsible tree for whole-folder ADDITIONS
     foreach ($r in $addedRoots) {
         $kids   = @($addedPaths | Where-Object { $_ -eq $r -or $_.StartsWith("$r\") })
         $nFold  = @($kids | Where-Object { $curMap[$_] -eq -1 }).Count
@@ -341,7 +374,6 @@ if (-not $firstRun -and $anyChange) {
         $entry += "</details>`n`n"
     }
 
-    # Collapsible tree for whole-folder DELETIONS
     foreach ($r in $removedRoots) {
         $kids   = @($removedPaths | Where-Object { $_ -eq $r -or $_.StartsWith("$r\") })
         $nFold  = @($kids | Where-Object { $prevMap[$_] -eq -1 }).Count
@@ -355,7 +387,6 @@ if (-not $firstRun -and $anyChange) {
 
     $entry += "---`n`n"
 
-    # Premium header (static) - emoji injected via variable
     $logHeader = @"
 <div align="center">
 
@@ -374,7 +405,6 @@ if (-not $firstRun -and $anyChange) {
 "@
     $marker = "<!--ENTRIES-->`n"
 
-    # Read existing entries (everything after marker)
     $oldEntries = ""
     if (Test-Path -LiteralPath $changesLog) {
         $existing = Get-Content -LiteralPath $changesLog -Raw
@@ -386,7 +416,6 @@ if (-not $firstRun -and $anyChange) {
     Write-Host "CHANGES.md updated (premium)." -ForegroundColor Green
 }
 
-# Build commit message
 $msg = "README auto-update: $date"
 if (-not $firstRun) {
     if ($trulyAdded.Count -gt 0)   { $msg += " | +[" + ($trulyAdded   -join ", ") + "]" }
