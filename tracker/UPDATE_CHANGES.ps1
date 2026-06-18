@@ -75,14 +75,17 @@ Set-Content -LiteralPath $readme -Value $full -Encoding UTF8
 Write-Host "README.md written." -ForegroundColor Green
 
 # Detect changes via snapshot (stores path|size so renames/moves can be detected)
+Write-Host "Scanning files... (large drives take a few minutes)" -ForegroundColor Yellow
 $items = Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
     Where-Object { ($_.FullName.Replace($root, '').TrimStart('\')) -notmatch '^\.git(\\|$)' }
 
+Write-Host "Building snapshot... ($($items.Count) items found)" -ForegroundColor Yellow
 $curMap = @{}
 foreach ($it in $items) {
     $rel = $it.FullName.Replace($root, '').TrimStart('\')
     $curMap[$rel] = if ($it.PSIsContainer) { [long]-1 } else { [long]$it.Length }
 }
+Write-Host "Comparing changes..." -ForegroundColor Yellow
 
 $firstRun = -not (Test-Path -LiteralPath $snapFile)
 $prevMap  = @{}
