@@ -15,19 +15,6 @@ $snapFile   = "$env:TEMP\drivetrack_$snapId.txt"
 $date       = Get-Date -Format "yyyy-MM-dd HH:mm"
 $dateFull   = Get-Date -Format "dd/MM/yyyy  dddd  hh:mm:ss tt"
 
-# Trust this folder for Git (fixes "dubious ownership" error) - happens when the
-# folder's NTFS owner (e.g. TrustedInstaller on C:\) differs from the Windows user
-# running the script. Must run before the "git add/commit/push" calls further down,
-# and before this script can be safely run standalone (e.g. after a fresh re-clone
-# on a new Windows install, where INITIAL.ps1 may never have run on this PC).
-if (Get-Command git -ErrorAction SilentlyContinue) {
-    $rootGit = $root.Replace('\', '/')
-    $alreadySafe = @(git config --global --get-all safe.directory 2>$null)
-    if ($alreadySafe -notcontains $rootGit) {
-        git config --global --add safe.directory $rootGit | Out-Null
-    }
-}
-
 # Auto-create the root .gitignore if it is missing (keeps repo root self-healing)
 $gitignore = "$root\.gitignore"
 if (-not (Test-Path -LiteralPath $gitignore)) {
@@ -88,10 +75,7 @@ Set-Content -LiteralPath $readme -Value $full -Encoding UTF8
 Write-Host "README.md written." -ForegroundColor Green
 
 # Detect changes via snapshot (stores path|size so renames/moves can be detected)
-# -ErrorAction SilentlyContinue: skips folders Windows blocks even for Admin
-# (System Volume Information, WindowsApps, SYSTEM-owned ProgramData paths, etc.)
-# instead of printing a red error for each one and cluttering the output.
-$items = Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
+$items = Get-ChildItem -LiteralPath $root -Recurse -Force |
     Where-Object { ($_.FullName.Replace($root, '').TrimStart('\')) -notmatch '^\.git(\\|$)' }
 
 $curMap = @{}

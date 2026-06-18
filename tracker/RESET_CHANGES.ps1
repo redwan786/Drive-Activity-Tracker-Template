@@ -14,16 +14,6 @@ $snapId     = ($root -replace '[^a-zA-Z0-9]', '_')
 $snapFile   = "$env:TEMP\drivetrack_$snapId.txt"
 $date       = Get-Date -Format "yyyy-MM-dd HH:mm"
 
-# Trust this folder for Git (fixes "dubious ownership" error) - see UPDATE_CHANGES.ps1
-# for the full explanation. Must run before the git commands at the bottom of this file.
-if (Get-Command git -ErrorAction SilentlyContinue) {
-    $rootGit = $root.Replace('\', '/')
-    $alreadySafe = @(git config --global --get-all safe.directory 2>$null)
-    if ($alreadySafe -notcontains $rootGit) {
-        git config --global --add safe.directory $rootGit | Out-Null
-    }
-}
-
 Write-Host ""
 Write-Host "  This will WIPE CHANGES.md and start fresh." -ForegroundColor Yellow
 $confirm = Read-Host "  Type 'yes' to continue"
