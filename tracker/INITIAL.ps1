@@ -27,7 +27,31 @@ Write-Host ""
 function Test-Cmd($name) { return [bool](Get-Command $name -ErrorAction SilentlyContinue) }
 
 # ------------------------------------------------------------
-# 0a. Auto-create the root .gitignore if missing (self-healing)
+# 0. git available? (must check before ANY git command in this file)
+# ------------------------------------------------------------
+if (-not (Test-Cmd git)) {
+    Write-Host "  ERROR: git is not installed." -ForegroundColor Red
+    Write-Host "  Install Git first: https://git-scm.com/download/win" -ForegroundColor Yellow
+    Read-Host "  Press Enter to exit"
+    return
+}
+
+# ------------------------------------------------------------
+# 0a. Trust this folder for Git (fixes "dubious ownership" error)
+#     Happens when the folder's NTFS owner (e.g. TrustedInstaller on C:\)
+#     differs from the Windows user running the script - common when
+#     tracking a whole drive like C:\ or D:\. MUST run before the very
+#     first git command anywhere below (including "git restore" further down).
+# ------------------------------------------------------------
+$rootGit = $root.Replace('\', '/')
+$alreadySafe = @(git config --global --get-all safe.directory 2>$null)
+if ($alreadySafe -notcontains $rootGit) {
+    git config --global --add safe.directory $rootGit | Out-Null
+    Write-Host "  Trusted '$rootGit' for Git (safe.directory)." -ForegroundColor DarkGray
+}
+
+# ------------------------------------------------------------
+# 0b. Auto-create the root .gitignore if missing (self-healing)
 # ------------------------------------------------------------
 $gitignore = Join-Path $root ".gitignore"
 if (-not (Test-Path -LiteralPath $gitignore)) {
@@ -47,7 +71,7 @@ if (-not (Test-Path -LiteralPath $gitignore)) {
 }
 
 # ------------------------------------------------------------
-# 0b. Core scripts present? (restore from git if missing)
+# 0c. Core scripts present? (restore from git if missing)
 # ------------------------------------------------------------
 $coreFull = @($updateScript, (Join-Path $scriptDir "RESET_CHANGES.ps1"))
 $missing  = $coreFull | Where-Object { -not (Test-Path -LiteralPath $_) }
@@ -84,17 +108,7 @@ if ($hasGit -and $hasRemote) {
 }
 
 # ------------------------------------------------------------
-# 2. git available?
-# ------------------------------------------------------------
-if (-not (Test-Cmd git)) {
-    Write-Host "  ERROR: git is not installed." -ForegroundColor Red
-    Write-Host "  Install Git first: https://git-scm.com/download/win" -ForegroundColor Yellow
-    Read-Host "  Press Enter to exit"
-    return
-}
-
-# ------------------------------------------------------------
-# 3. gh (GitHub CLI) available? If not, offer to install.
+# 2. gh (GitHub CLI) available? If not, offer to install.
 # ------------------------------------------------------------
 if (-not (Test-Cmd gh)) {
     Write-Host "  GitHub CLI (gh) is NOT installed." -ForegroundColor Yellow
@@ -138,7 +152,7 @@ if (-not (Test-Cmd gh)) {
 }
 
 # ------------------------------------------------------------
-# 4. gh logged in?
+# 3. gh logged in?
 # ------------------------------------------------------------
 gh auth status 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
@@ -154,7 +168,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ------------------------------------------------------------
-# 5. Decide repo name
+# 4. Decide repo name
 # ------------------------------------------------------------
 $autoName = ($folderName -replace '[^a-zA-Z0-9._-]', '-') + "-Activity-Tracker"
 Write-Host ""
@@ -169,7 +183,7 @@ if ($nameAns -match '^(y|yes)$') {
 Write-Host "  Repo name: $repoName  (Private)" -ForegroundColor Cyan
 
 # ------------------------------------------------------------
-# 6. git init + first commit (if needed)
+# 5. git init + first commit (if needed)
 # ------------------------------------------------------------
 if (-not $hasGit) {
     git init | Out-Null
@@ -179,7 +193,7 @@ git add -A
 git commit -m "Initial setup" 2>$null | Out-Null
 
 # ------------------------------------------------------------
-# 7. Create the GitHub repo (or link if it exists) + push
+# 6. Create the GitHub repo (or link if it exists) + push
 # ------------------------------------------------------------
 Write-Host "  Creating GitHub repo..." -ForegroundColor Yellow
 gh repo create $repoName --private --source=. --remote=origin --push 2>$null
@@ -199,7 +213,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ------------------------------------------------------------
-# 8. First content (README + CHANGES) + push
+# 7. First content (README + CHANGES) + push
 # ------------------------------------------------------------
 Write-Host ""
 Write-Host "  Repo ready. Generating README + CHANGES..." -ForegroundColor Green
