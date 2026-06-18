@@ -1,0 +1,10 @@
+﻿# Ignore everything by default
+*
+
+# Keep the landing index at repo root
+!README.md
+!.gitignore
+
+# Keep the whole tracker folder (scripts, launchers, SETUP.md, CHANGES.md)
+!tracker/
+!tracker/**

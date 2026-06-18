@@ -1,0 +1,352 @@
+# Location-aware: if this script lives in a "tracker" subfolder, track its PARENT
+# (the real drive/folder). Otherwise track the folder it sits in. Works on any drive.
+$scriptDir  = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }
+if ((Split-Path $scriptDir -Leaf) -ieq 'tracker') {
+    $root       = Split-Path $scriptDir -Parent   # the drive/folder being tracked
+    $changesLog = "$scriptDir\CHANGES.md"          # CHANGES.md lives inside tracker
+} else {
+    $root       = $scriptDir
+    $changesLog = "$root\CHANGES.md"
+}
+$readme     = "$root\README.md"                    # README stays at repo root (for GitHub)
+# Snapshot name is unique per folder (so different drives/folders don't clash)
+$snapId     = ($root -replace '[^a-zA-Z0-9]', '_')
+$snapFile   = "$env:TEMP\drivetrack_$snapId.txt"
+$date       = Get-Date -Format "yyyy-MM-dd HH:mm"
+$dateFull   = Get-Date -Format "dd/MM/yyyy  dddd  hh:mm:ss tt"
+
+# Auto-create the root .gitignore if it is missing (keeps repo root self-healing)
+$gitignore = "$root\.gitignore"
+if (-not (Test-Path -LiteralPath $gitignore)) {
+    @'
+# Ignore everything by default
+*
+
+# Keep the landing index at repo root
+!README.md
+!.gitignore
+
+# Keep the whole tracker folder (scripts, launchers, SETUP.md, CHANGES.md)
+!tracker/
+!tracker/**
+'@ | Set-Content -LiteralPath $gitignore -Encoding UTF8
+    Write-Host ".gitignore was missing - recreated." -ForegroundColor Yellow
+}
+
+Write-Host "Generating tree..." -ForegroundColor Yellow
+
+$tree = & cmd /c "tree `"$root`" /F /A 2>&1"
+$treeText = $tree -join "`n"
+
+# Dynamic title from folder name (portable - no hardcoded names)
+$folderName = Split-Path $root -Leaf
+
+# Auto Quick Find: list top-level folders (alphabetical), with their direct subfolder count
+$topFolders = Get-ChildItem -LiteralPath $root -Directory -Force |
+    Where-Object { $_.Name -ne '.git' } | Sort-Object Name
+$quick = "| Folder | Contains |`n|--------|----------|`n"
+foreach ($tf in $topFolders) {
+    $subs = @(Get-ChildItem -LiteralPath $tf.FullName -Directory -Force -ErrorAction SilentlyContinue)
+    $files = @(Get-ChildItem -LiteralPath $tf.FullName -File -Force -ErrorAction SilentlyContinue)
+    $desc = "$($subs.Count) folder(s), $($files.Count) file(s)"
+    $quick += "| ``$($tf.Name)/`` | $desc |`n"
+}
+
+$header = @"
+# $folderName - Index
+
+---
+
+## Quick Find
+
+$quick
+---
+
+## Full Folder Tree
+
+``````
+"@
+
+$footer = "``````"
+
+$full = $header + $treeText + "`n" + $footer + "`n`n> Last updated: $date"
+
+Set-Content -LiteralPath $readme -Value $full -Encoding UTF8
+Write-Host "README.md written." -ForegroundColor Green
+
+# Detect changes via snapshot (stores path|size so renames/moves can be detected)
+$items = Get-ChildItem -LiteralPath $root -Recurse -Force |
+    Where-Object { ($_.FullName.Replace($root, '').TrimStart('\')) -notmatch '^\.git(\\|$)' }
+
+$curMap = @{}
+foreach ($it in $items) {
+    $rel = $it.FullName.Replace($root, '').TrimStart('\')
+    $curMap[$rel] = if ($it.PSIsContainer) { [long]-1 } else { [long]$it.Length }
+}
+
+$firstRun = -not (Test-Path -LiteralPath $snapFile)
+$prevMap  = @{}
+if (-not $firstRun) {
+    foreach ($line in (Get-Content -LiteralPath $snapFile)) {
+        if ($line -eq '') { continue }
+        $i = $line.LastIndexOf('|')
+        if ($i -gt 0) { $prevMap[$line.Substring(0,$i)] = [long]$line.Substring($i+1) }
+        else          { $prevMap[$line] = [long]-1 }   # backward compat (old path-only snapshot)
+    }
+}
+
+# Save new snapshot (path|size)
+($curMap.Keys | Sort-Object | ForEach-Object { "$_|$($curMap[$_])" }) | Set-Content -LiteralPath $snapFile -Encoding UTF8
+
+# Raw added / removed
+$added   = @($curMap.Keys  | Where-Object { -not $prevMap.ContainsKey($_) } | Sort-Object)
+$removed = @($prevMap.Keys | Where-Object { -not $curMap.ContainsKey($_) } | Sort-Object)
+
+# Raw sets (used to tell whether an item's PARENT also changed)
+$addedSetRaw   = @{}; $added   | ForEach-Object { $addedSetRaw[$_]   = $true }
+$removedSetRaw = @{}; $removed | ForEach-Object { $removedSetRaw[$_] = $true }
+
+# A rename/move is only real when the item's PARENT is unchanged.
+# If the parent itself was added/removed, the item is just part of a
+# whole-folder add/delete (prevents false "tmp -> tmp" type matches across
+# completely unrelated trees).
+function Test-ParentUnchanged($relPath, $set) {
+    $par = Split-Path $relPath -Parent
+    if (-not $par) { return $true }          # top-level item, parent is the root (unchanged)
+    return -not $set.ContainsKey($par)
+}
+
+$renames = @()   # folder renames  {From,To,Count}
+$moves   = @()   # file moves/renames {From,To}
+$consumed = @{}
+
+# --- 1. Folder rename detection (subtree matches via prefix swap) ---
+# Shallowest folders first so a top-level rename consumes its whole subtree
+# (otherwise nested folders match first and the parent looks like delete+add)
+$remFolders = @($removed | Where-Object { $prevMap[$_] -eq -1 -and (Test-ParentUnchanged $_ $removedSetRaw) } | Sort-Object { ($_ -split '\\').Count }, { $_ })
+$addFolders = @($added   | Where-Object { $curMap[$_]  -eq -1 -and (Test-ParentUnchanged $_ $addedSetRaw)   } | Sort-Object { ($_ -split '\\').Count }, { $_ })
+foreach ($rf in $remFolders) {
+    if ($consumed.ContainsKey($rf)) { continue }
+    $rfSub = @($removed | Where-Object { $_ -eq $rf -or $_.StartsWith("$rf\") })
+    $rfRel = ($rfSub | ForEach-Object { $_.Substring($rf.Length) } | Sort-Object) -join '|'
+    foreach ($af in $addFolders) {
+        if ($consumed.ContainsKey($af)) { continue }
+        $afSub = @($added | Where-Object { $_ -eq $af -or $_.StartsWith("$af\") })
+        $afRel = ($afSub | ForEach-Object { $_.Substring($af.Length) } | Sort-Object) -join '|'
+        if ($rfRel -eq $afRel) {
+            $renames += [pscustomobject]@{ From = $rf; To = $af; Count = $rfSub.Count }
+            $rfSub | ForEach-Object { $consumed[$_] = $true }
+            $afSub | ForEach-Object { $consumed[$_] = $true }
+            break
+        }
+    }
+}
+
+# --- 2. File move/rename detection (same leaf name + same size) ---
+# Only files whose parent is unchanged — a file inside a wholesale added/deleted
+# folder belongs to that folder's tree, not a separate move.
+$remFiles = @($removed | Where-Object { -not $consumed.ContainsKey($_) -and $prevMap[$_] -ge 0 -and (Test-ParentUnchanged $_ $removedSetRaw) })
+$addFiles = @($added   | Where-Object { -not $consumed.ContainsKey($_) -and $curMap[$_]  -ge 0 -and (Test-ParentUnchanged $_ $addedSetRaw)   })
+foreach ($r in $remFiles) {
+    if ($consumed.ContainsKey($r)) { continue }
+    $rLeaf = Split-Path $r -Leaf
+    $rSize = $prevMap[$r]
+    foreach ($a in $addFiles) {
+        if ($consumed.ContainsKey($a)) { continue }
+        if ((Split-Path $a -Leaf) -eq $rLeaf -and $curMap[$a] -eq $rSize) {
+            $moves += [pscustomobject]@{ From = $r; To = $a }
+            $consumed[$r] = $true; $consumed[$a] = $true
+            break
+        }
+    }
+}
+
+# Final pure adds / removes (after rename+move consumed)
+$addedPaths   = @($added   | Where-Object { -not $consumed.ContainsKey($_) })
+$removedPaths = @($removed | Where-Object { -not $consumed.ContainsKey($_) })
+
+# --- Group whole-folder add/delete under their root (so a new folder with
+#     many items shows as ONE root + a nested tree, not 50 separate rows) ---
+$addedSet = @{};   $addedPaths   | ForEach-Object { $addedSet[$_] = $true }
+$removedSet = @{}; $removedPaths | ForEach-Object { $removedSet[$_] = $true }
+
+$addedRoots = @()
+foreach ($p in $addedPaths) {
+    if ($curMap[$p] -ne -1) { continue }                          # must be a folder
+    $par = Split-Path $p -Parent
+    if ($par -and $addedSet.ContainsKey($par)) { continue }       # parent also new -> not the root
+    if (@($addedPaths | Where-Object { $_.StartsWith("$p\") }).Count -gt 0) { $addedRoots += $p }
+}
+$addedGrouped = @{}
+foreach ($r in $addedRoots) {
+    $addedPaths | Where-Object { $_ -eq $r -or $_.StartsWith("$r\") } | ForEach-Object { $addedGrouped[$_] = $true }
+}
+$addedFlat = @($addedPaths | Where-Object { -not $addedGrouped.ContainsKey($_) })
+
+$removedRoots = @()
+foreach ($p in $removedPaths) {
+    if ($prevMap[$p] -ne -1) { continue }                         # must be a folder
+    $par = Split-Path $p -Parent
+    if ($par -and $removedSet.ContainsKey($par)) { continue }
+    if (@($removedPaths | Where-Object { $_.StartsWith("$p\") }).Count -gt 0) { $removedRoots += $p }
+}
+$removedGrouped = @{}
+foreach ($r in $removedRoots) {
+    $removedPaths | Where-Object { $_ -eq $r -or $_.StartsWith("$r\") } | ForEach-Object { $removedGrouped[$_] = $true }
+}
+$removedFlat = @($removedPaths | Where-Object { -not $removedGrouped.ContainsKey($_) })
+
+# Commit message names (root folders + flat items — keeps it short)
+$trulyAdded   = (@($addedRoots)   + @($addedFlat))   | ForEach-Object { Split-Path $_ -Leaf } | Select-Object -Unique
+$trulyRemoved = (@($removedRoots) + @($removedFlat)) | ForEach-Object { Split-Path $_ -Leaf } | Select-Object -Unique
+$trulyMoved   = @($renames + $moves) | ForEach-Object { Split-Path $_.To -Leaf } | Select-Object -Unique
+
+$anyChange = ($addedPaths.Count + $removedPaths.Count + $renames.Count + $moves.Count) -gt 0
+
+# --- Update CHANGES.md with premium UI (newest entry on top) ---
+if (-not $firstRun -and $anyChange) {
+
+    # Helper: detect File vs Folder
+    function Get-ItemKind($relPath, $exists) {
+        $full = Join-Path $root $relPath
+        if ($exists) {
+            if (Test-Path -LiteralPath $full -PathType Container) { return "Folder" } else { return "File" }
+        } else {
+            if ([System.IO.Path]::GetExtension($relPath)) { return "File" } else { return "Folder" }
+        }
+    }
+
+    $addCount  = $addedPaths.Count
+    $delCount  = $removedPaths.Count
+    $moveCount = $renames.Count + $moves.Count
+
+    # Emojis built from Unicode (keeps this .ps1 pure ASCII so it never corrupts)
+    $emFolder = [char]::ConvertFromUtf32(0x1F4C1)  # folder
+    $emFile   = [char]::ConvertFromUtf32(0x1F4C4)  # file
+    $emGreen  = [char]::ConvertFromUtf32(0x1F7E2)  # green circle
+    $emRed    = [char]::ConvertFromUtf32(0x1F534)  # red circle
+    $emBlue   = [char]::ConvertFromUtf32(0x1F535)  # blue circle (moved/renamed)
+    $emArrow  = [char]::ConvertFromUtf32(0x2192)   # right arrow
+    $emScroll = [char]::ConvertFromUtf32(0x1F4DC)  # scroll
+
+    # Helper: render a nested tree for a grouped root folder
+    function Render-Tree($paths, $rootPath, $isAdded) {
+        $parent = Split-Path $rootPath -Parent
+        $lines = @()
+        foreach ($p in ($paths | Sort-Object)) {
+            if ($parent) { $relDisp = $p.Substring($parent.Length).TrimStart('\') } else { $relDisp = $p }
+            $depth  = ($relDisp -split '\\').Count - 1
+            $indent = "    " * $depth
+            $leaf   = Split-Path $p -Leaf
+            $kind   = Get-ItemKind $p $isAdded
+            if ($kind -eq "Folder") { $lines += "$indent$emFolder $leaf/" }
+            else                    { $lines += "$indent$emFile $leaf" }
+        }
+        return ($lines -join "`n")
+    }
+
+    $fence = '```'   # triple backtick (single-quoted = literal)
+
+    # Build this run's entry block (badges)
+    # Self-contained <kbd> badges (no external image links) with colored emoji dots
+    $entry  = "### " + '`' + $dateFull + '`' + "  &nbsp; "
+    if ($addCount  -gt 0) { $entry += "![Added](https://img.shields.io/badge/Added-$addCount-2ea44f?style=flat-square) " }
+    if ($delCount  -gt 0) { $entry += "![Deleted](https://img.shields.io/badge/Deleted-$delCount-d73a49?style=flat-square) " }
+    if ($moveCount -gt 0) { $entry += "![Moved](https://img.shields.io/badge/Renamed%2FMoved-$moveCount-0969da?style=flat-square)" }
+    $entry += "`n`n"
+
+    # Table for single items (renames, moves, flat add/delete)
+    $rows = @()
+    foreach ($m in $renames) {
+        $rows += "| $emBlue | **Renamed** | $emFolder Folder | ``$(Split-Path $m.To -Leaf)`` | ``$(Join-Path $root $m.From)`` $emArrow ``$(Join-Path $root $m.To)`` |"
+    }
+    foreach ($m in $moves) {
+        $rows += "| $emBlue | **Moved/Renamed** | $emFile File | ``$(Split-Path $m.To -Leaf)`` | ``$(Join-Path $root $m.From)`` $emArrow ``$(Join-Path $root $m.To)`` |"
+    }
+    foreach ($p in $addedFlat) {
+        $kind = Get-ItemKind $p $true
+        $icon = if ($kind -eq "Folder") { $emFolder } else { $emFile }
+        $rows += "| $emGreen | **Added** | $icon $kind | ``$(Split-Path $p -Leaf)`` | ``$(Join-Path $root $p)`` |"
+    }
+    foreach ($p in $removedFlat) {
+        $kind = Get-ItemKind $p $false
+        $icon = if ($kind -eq "Folder") { $emFolder } else { $emFile }
+        $rows += "| $emRed | **Deleted** | $icon $kind | ``$(Split-Path $p -Leaf)`` | ``$(Join-Path $root $p)`` |"
+    }
+    if ($rows.Count -gt 0) {
+        $entry += "| | Action | Type | Name | Path |`n"
+        $entry += "|:-:|:--|:--|:--|:--|`n"
+        $entry += ($rows -join "`n") + "`n`n"
+    }
+
+    # Collapsible tree for whole-folder ADDITIONS
+    foreach ($r in $addedRoots) {
+        $kids   = @($addedPaths | Where-Object { $_ -eq $r -or $_.StartsWith("$r\") })
+        $nFold  = @($kids | Where-Object { $curMap[$_] -eq -1 }).Count
+        $nFile  = $kids.Count - $nFold
+        $tree   = Render-Tree $kids $r $true
+        $entry += "<details open>`n"
+        $entry += "<summary>$emGreen <b>Added folder</b> <code>$(Split-Path $r -Leaf)</code> &mdash; $nFold folder(s), $nFile file(s) &nbsp; <code>$(Join-Path $root $r)</code></summary>`n`n"
+        $entry += $fence + "`n" + $tree + "`n" + $fence + "`n`n"
+        $entry += "</details>`n`n"
+    }
+
+    # Collapsible tree for whole-folder DELETIONS
+    foreach ($r in $removedRoots) {
+        $kids   = @($removedPaths | Where-Object { $_ -eq $r -or $_.StartsWith("$r\") })
+        $nFold  = @($kids | Where-Object { $prevMap[$_] -eq -1 }).Count
+        $nFile  = $kids.Count - $nFold
+        $tree   = Render-Tree $kids $r $false
+        $entry += "<details>`n"
+        $entry += "<summary>$emRed <b>Deleted folder</b> <code>$(Split-Path $r -Leaf)</code> &mdash; $nFold folder(s), $nFile file(s) &nbsp; <code>$(Join-Path $root $r)</code></summary>`n`n"
+        $entry += $fence + "`n" + $tree + "`n" + $fence + "`n`n"
+        $entry += "</details>`n`n"
+    }
+
+    $entry += "---`n`n"
+
+    # Premium header (static) — emoji injected via variable
+    $logHeader = @"
+<div align="center">
+
+# $emScroll Change Log
+
+### Google Drive/Drive/Folder - Activity Tracker
+
+![Auto](https://img.shields.io/badge/AUTO--GENERATED-2188ff?style=for-the-badge) &nbsp; ![Live](https://img.shields.io/badge/LIVE_TRACKING-2ea44f?style=for-the-badge)
+
+</div>
+
+> Every file or folder added/rename/move/deleted is recorded below - **newest first**.
+
+---
+
+"@
+    $marker = "<!--ENTRIES-->`n"
+
+    # Read existing entries (everything after marker)
+    $oldEntries = ""
+    if (Test-Path -LiteralPath $changesLog) {
+        $existing = Get-Content -LiteralPath $changesLog -Raw
+        if ($existing -match '(?s)<!--ENTRIES-->\r?\n(.*)') { $oldEntries = $matches[1] }
+    }
+
+    $newContent = $logHeader + $marker + $entry + $oldEntries
+    Set-Content -LiteralPath $changesLog -Value $newContent -Encoding UTF8
+    Write-Host "CHANGES.md updated (premium)." -ForegroundColor Green
+}
+
+# Build commit message
+$msg = "README auto-update: $date"
+if (-not $firstRun) {
+    if ($trulyAdded.Count -gt 0)   { $msg += " | +[" + ($trulyAdded   -join ", ") + "]" }
+    if ($trulyRemoved.Count -gt 0) { $msg += " | -[" + ($trulyRemoved -join ", ") + "]" }
+    if ($trulyMoved.Count -gt 0)   { $msg += " | ~[" + ($trulyMoved   -join ", ") + "]" }
+}
+
+Set-Location -LiteralPath $root
+git add -A
+git commit -m $msg
+git push
+Write-Host "Done! Pushed at $date" -ForegroundColor Green
+Start-Sleep -Seconds 1
